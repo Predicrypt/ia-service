@@ -1,0 +1,392 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: pipeline-
+  annotations: {pipelines.kubeflow.org/kfp_sdk_version: 1.6.3, pipelines.kubeflow.org/pipeline_compilation_time: '2021-06-06T21:16:57.269407',
+    pipelines.kubeflow.org/pipeline_spec: '{"inputs": [{"name": "symbol"}, {"name":
+      "interval"}, {"name": "limit"}], "name": "Pipeline"}'}
+  labels: {pipelines.kubeflow.org/kfp_sdk_version: 1.6.3}
+spec:
+  entrypoint: pipeline
+  templates:
+  - name: get-all-data
+    container:
+      args: [--symbol, '{{inputs.parameters.symbol}}', --interval, '{{inputs.parameters.interval}}',
+        --limit, '{{inputs.parameters.limit}}', --output, /tmp/outputs/output/data]
+      command:
+      - sh
+      - -c
+      - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+        'aiohttp===3.7.4' 'asyncio' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m
+        pip install --quiet --no-warn-script-location 'aiohttp===3.7.4' 'asyncio'
+        --user) && "$0" "$@"
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - |
+        def _make_parent_dirs_and_return_path(file_path: str):
+            import os
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            return file_path
+
+        def get_all_data(symbol, interval, limit, output_path):
+
+            import asyncio
+            from aiohttp import ClientSession
+            import pickle
+
+            intervalDict = {
+                "1h": 3600*1000,
+                "4h": 4*3600*1000,
+                "8h": 8*3600*1000
+            }
+
+            klines = []
+
+            async def getKlines(session, url, params):
+                async with session.get(url, params=params) as res:
+                    klines = await res.json()
+                    return klines
+
+            async def getTime(session):
+                url = "https://api.binance.com/api/v3/time"
+                async with session.get(url) as res:
+                    return await res.json()
+
+            def roundTime(time):
+                BASE = 100000
+
+                r = time % BASE
+
+                return time + BASE - r
+
+            async def getData(symbol, interval, limit):
+
+                import os
+
+                MAX_DATA_REQUEST = 1000
+                URL = "https://api.binance.com/api/v3/klines"
+
+                async with ClientSession() as session:
+                    time_started = (await getTime(session))["serverTime"]
+                    tasks = []
+                    for i in range(0, int(limit/MAX_DATA_REQUEST)):
+                        end_time = int(time_started - i*(MAX_DATA_REQUEST)
+                                       * intervalDict[interval])
+                        end_time = roundTime(end_time)
+                        tasks.append(asyncio.ensure_future(getKlines(session, URL, {
+                            "interval": interval, "symbol": symbol, "limit": MAX_DATA_REQUEST, "endTime": end_time})))
+
+                    data = await asyncio.gather(*tasks)
+
+                    for req in data:
+                        for kline in req:
+                            klines.insert(0, kline)
+
+            asyncio.run(getData(symbol, interval, limit))
+            with open(output_path, 'wb') as fp:
+                pickle.dump(klines, fp)
+
+        import argparse
+        _parser = argparse.ArgumentParser(prog='Get all data', description='')
+        _parser.add_argument("--symbol", dest="symbol", type=str, required=True, default=argparse.SUPPRESS)
+        _parser.add_argument("--interval", dest="interval", type=str, required=True, default=argparse.SUPPRESS)
+        _parser.add_argument("--limit", dest="limit", type=int, required=True, default=argparse.SUPPRESS)
+        _parser.add_argument("--output", dest="output_path", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
+        _parsed_args = vars(_parser.parse_args())
+
+        _outputs = get_all_data(**_parsed_args)
+      image: python:3.8
+    inputs:
+      parameters:
+      - {name: interval}
+      - {name: limit}
+      - {name: symbol}
+    outputs:
+      artifacts:
+      - {name: get-all-data-output, path: /tmp/outputs/output/data}
+    metadata:
+      labels: {pipelines.kubeflow.org/kfp_sdk_version: 1.6.3, pipelines.kubeflow.org/pipeline-sdk-type: kfp}
+      annotations: {pipelines.kubeflow.org/component_spec: '{"implementation": {"container":
+          {"args": ["--symbol", {"inputValue": "symbol"}, "--interval", {"inputValue":
+          "interval"}, "--limit", {"inputValue": "limit"}, "--output", {"outputPath":
+          "output"}], "command": ["sh", "-c", "(PIP_DISABLE_PIP_VERSION_CHECK=1 python3
+          -m pip install --quiet --no-warn-script-location ''aiohttp===3.7.4'' ''asyncio''
+          || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+          ''aiohttp===3.7.4'' ''asyncio'' --user) && \"$0\" \"$@\"", "sh", "-ec",
+          "program_path=$(mktemp)\nprintf \"%s\" \"$0\" > \"$program_path\"\npython3
+          -u \"$program_path\" \"$@\"\n", "def _make_parent_dirs_and_return_path(file_path:
+          str):\n    import os\n    os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return
+          file_path\n\ndef get_all_data(symbol, interval, limit, output_path):\n\n    import
+          asyncio\n    from aiohttp import ClientSession\n    import pickle\n\n    intervalDict
+          = {\n        \"1h\": 3600*1000,\n        \"4h\": 4*3600*1000,\n        \"8h\":
+          8*3600*1000\n    }\n\n    klines = []\n\n    async def getKlines(session,
+          url, params):\n        async with session.get(url, params=params) as res:\n            klines
+          = await res.json()\n            return klines\n\n    async def getTime(session):\n        url
+          = \"https://api.binance.com/api/v3/time\"\n        async with session.get(url)
+          as res:\n            return await res.json()\n\n    def roundTime(time):\n        BASE
+          = 100000\n\n        r = time % BASE\n\n        return time + BASE - r\n\n    async
+          def getData(symbol, interval, limit):\n\n        import os\n\n        MAX_DATA_REQUEST
+          = 1000\n        URL = \"https://api.binance.com/api/v3/klines\"\n\n        async
+          with ClientSession() as session:\n            time_started = (await getTime(session))[\"serverTime\"]\n            tasks
+          = []\n            for i in range(0, int(limit/MAX_DATA_REQUEST)):\n                end_time
+          = int(time_started - i*(MAX_DATA_REQUEST)\n                               *
+          intervalDict[interval])\n                end_time = roundTime(end_time)\n                tasks.append(asyncio.ensure_future(getKlines(session,
+          URL, {\n                    \"interval\": interval, \"symbol\": symbol,
+          \"limit\": MAX_DATA_REQUEST, \"endTime\": end_time})))\n\n            data
+          = await asyncio.gather(*tasks)\n\n            for req in data:\n                for
+          kline in req:\n                    klines.insert(0, kline)\n\n    asyncio.run(getData(symbol,
+          interval, limit))\n    with open(output_path, ''wb'') as fp:\n        pickle.dump(klines,
+          fp)\n\nimport argparse\n_parser = argparse.ArgumentParser(prog=''Get all
+          data'', description='''')\n_parser.add_argument(\"--symbol\", dest=\"symbol\",
+          type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--interval\",
+          dest=\"interval\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--limit\",
+          dest=\"limit\", type=int, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--output\",
+          dest=\"output_path\", type=_make_parent_dirs_and_return_path, required=True,
+          default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\n_outputs
+          = get_all_data(**_parsed_args)\n"], "image": "python:3.8"}}, "inputs": [{"name":
+          "symbol", "type": "String"}, {"name": "interval", "type": "String"}, {"name":
+          "limit", "type": "Integer"}], "name": "Get all data", "outputs": [{"name":
+          "output", "type": "String"}]}', pipelines.kubeflow.org/component_ref: '{}',
+        pipelines.kubeflow.org/arguments.parameters: '{"interval": "{{inputs.parameters.interval}}",
+          "limit": "{{inputs.parameters.limit}}", "symbol": "{{inputs.parameters.symbol}}"}'}
+  - name: pipeline
+    inputs:
+      parameters:
+      - {name: interval}
+      - {name: limit}
+      - {name: symbol}
+    dag:
+      tasks:
+      - name: get-all-data
+        template: get-all-data
+        arguments:
+          parameters:
+          - {name: interval, value: '{{inputs.parameters.interval}}'}
+          - {name: limit, value: '{{inputs.parameters.limit}}'}
+          - {name: symbol, value: '{{inputs.parameters.symbol}}'}
+      - name: process-data
+        template: process-data
+        dependencies: [get-all-data]
+        arguments:
+          artifacts:
+          - {name: get-all-data-output, from: '{{tasks.get-all-data.outputs.artifacts.get-all-data-output}}'}
+  - name: process-data
+    container:
+      args: [--input, /tmp/inputs/input/data, '----output-paths', /tmp/outputs/Output/data]
+      command:
+      - sh
+      - -c
+      - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+        'pandas==1.2.4' 'scikit-learn==0.24.2' || PIP_DISABLE_PIP_VERSION_CHECK=1
+        python3 -m pip install --quiet --no-warn-script-location 'pandas==1.2.4' 'scikit-learn==0.24.2'
+        --user) && "$0" "$@"
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - |
+        def process_data(input_path):
+
+            from sklearn import preprocessing
+            import numpy as np
+            from pandas.core.frame import DataFrame
+            import pickle
+
+            n = 14
+            train_size = 0.8
+            timesteps = 60
+
+            def rma(x, n, y0):
+                a = (n-1) / n
+                ak = a**np.arange(len(x)-1, -1, -1)
+                return np.r_[np.full(n, np.nan, dtype=np.float64), y0, np.cumsum(ak * x) / ak / n + y0 * a**np.arange(1, len(x)+1)]
+
+            dataDict = {
+                "closeTime": [],
+                "open": [],
+                "high": [],
+                "low": [],
+                "close": [],
+                "volume": []
+            }
+
+            data = []
+
+            with open(input_path, 'rb') as fp:
+                data = pickle.load(fp)
+
+            for kline in data:
+                dataDict["closeTime"].append(kline[0])
+                dataDict["open"].append(float(kline[1]))
+                dataDict["high"].append(float(kline[2]))
+                dataDict["low"].append(float(kline[3]))
+                dataDict["close"].append(float(kline[4]))
+                dataDict["volume"].append(float(kline[5]))
+
+            df = DataFrame(dataDict)
+
+            # Calculate SMA
+            df["SMA_20"] = df.iloc[:, 4].rolling(window=20).mean()
+            df["SMA_50"] = df.iloc[:, 4].rolling(window=50).mean()
+            df["SMA_200"] = df.iloc[:, 4].rolling(window=200).mean()
+
+            # Calculate RSI
+
+            df['change'] = df['close'].diff()
+            df['gain'] = df.change.mask(df.change < 0, 0.0)
+            df['loss'] = -df.change.mask(df.change > 0, -0.0)
+            df['avg_gain'] = rma(df.gain[n+1:].to_numpy(), n,
+                                 np.nansum(df.gain.to_numpy()[:n+1])/n)
+            df['avg_loss'] = rma(df.loss[n+1:].to_numpy(), n,
+                                 np.nansum(df.loss.to_numpy()[:n+1])/n)
+            df['rs'] = df.avg_gain / df.avg_loss
+            df['rsi'] = 100 - (100 / (1 + df.rs))
+
+            df.drop(columns=['change', 'gain', 'loss', 'avg_gain', 'avg_loss', 'rs'])
+
+            # MACD
+
+            exp1 = df['close'].ewm(span=12, adjust=False).mean()
+            exp2 = df['close'].ewm(span=26, adjust=False).mean()
+
+            df['macd'] = exp1 - exp2
+            df['signal_line'] = df['macd'].ewm(span=9, adjust=False).mean()
+
+            # Train and Test data
+
+            size = int(len(df['close']) * train_size)
+
+            train_set = df.iloc[:size, :].values
+            test_set = df.iloc[size:, :].values
+
+            # Feature scaling
+
+            scaler = preprocessing.StandardScaler().fit(train_set)
+
+            # X and Y and reshape
+            train_set_scaled = scaler.transform(train_set)
+            test_set_scaled = scaler.transform(test_set)
+
+            x_train = []
+            y_train = []
+            x_test = []
+            y_test = []
+
+            for i in range(60, len(train_set_scaled)):
+                x_train.append(train_set_scaled[i - 60:i, :])
+                if i != len(train_set_scaled):
+                    y_train.append(train_set_scaled[i, 4])
+                else:
+                    y_train.append(test_set_scaled[0, 4])
+
+            for i in range(60, len(test_set_scaled) - 1):
+                x_test.append(test_set_scaled[i - 60:i, :])
+                y_test.append(test_set_scaled[i, 4])
+
+            x_train, y_train = np.array(x_train), np.array(y_train)
+            x_test, y_test = np.array(x_test), np.array(y_test)
+
+            x_train = np.reshape(
+                x_train, (x_train.shape[0], timesteps, x_train.shape[2]))
+            x_test = np.reshape(x_test, (x_test.shape[0], timesteps, x_test.shape[2]))
+
+            return x_train, y_train, x_test, y_test
+
+        import argparse
+        _parser = argparse.ArgumentParser(prog='Process data', description='')
+        _parser.add_argument("--input", dest="input_path", type=str, required=True, default=argparse.SUPPRESS)
+        _parser.add_argument("----output-paths", dest="_output_paths", type=str, nargs=1)
+        _parsed_args = vars(_parser.parse_args())
+        _output_files = _parsed_args.pop("_output_paths", [])
+
+        _outputs = process_data(**_parsed_args)
+
+        _outputs = [_outputs]
+
+        _output_serializers = [
+            str,
+
+        ]
+
+        import os
+        for idx, output_file in enumerate(_output_files):
+            try:
+                os.makedirs(os.path.dirname(output_file))
+            except OSError:
+                pass
+            with open(output_file, 'w') as f:
+                f.write(_output_serializers[idx](_outputs[idx]))
+      image: python:3.8
+    inputs:
+      artifacts:
+      - {name: get-all-data-output, path: /tmp/inputs/input/data}
+    outputs:
+      artifacts:
+      - {name: process-data-Output, path: /tmp/outputs/Output/data}
+    metadata:
+      labels: {pipelines.kubeflow.org/kfp_sdk_version: 1.6.3, pipelines.kubeflow.org/pipeline-sdk-type: kfp}
+      annotations: {pipelines.kubeflow.org/component_spec: '{"implementation": {"container":
+          {"args": ["--input", {"inputPath": "input"}, "----output-paths", {"outputPath":
+          "Output"}], "command": ["sh", "-c", "(PIP_DISABLE_PIP_VERSION_CHECK=1 python3
+          -m pip install --quiet --no-warn-script-location ''pandas==1.2.4'' ''scikit-learn==0.24.2''
+          || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+          ''pandas==1.2.4'' ''scikit-learn==0.24.2'' --user) && \"$0\" \"$@\"", "sh",
+          "-ec", "program_path=$(mktemp)\nprintf \"%s\" \"$0\" > \"$program_path\"\npython3
+          -u \"$program_path\" \"$@\"\n", "def process_data(input_path):\n\n    from
+          sklearn import preprocessing\n    import numpy as np\n    from pandas.core.frame
+          import DataFrame\n    import pickle\n\n    n = 14\n    train_size = 0.8\n    timesteps
+          = 60\n\n    def rma(x, n, y0):\n        a = (n-1) / n\n        ak = a**np.arange(len(x)-1,
+          -1, -1)\n        return np.r_[np.full(n, np.nan, dtype=np.float64), y0,
+          np.cumsum(ak * x) / ak / n + y0 * a**np.arange(1, len(x)+1)]\n\n    dataDict
+          = {\n        \"closeTime\": [],\n        \"open\": [],\n        \"high\":
+          [],\n        \"low\": [],\n        \"close\": [],\n        \"volume\": []\n    }\n\n    data
+          = []\n\n    with open(input_path, ''rb'') as fp:\n        data = pickle.load(fp)\n\n    for
+          kline in data:\n        dataDict[\"closeTime\"].append(kline[0])\n        dataDict[\"open\"].append(float(kline[1]))\n        dataDict[\"high\"].append(float(kline[2]))\n        dataDict[\"low\"].append(float(kline[3]))\n        dataDict[\"close\"].append(float(kline[4]))\n        dataDict[\"volume\"].append(float(kline[5]))\n\n    df
+          = DataFrame(dataDict)\n\n    # Calculate SMA\n    df[\"SMA_20\"] = df.iloc[:,
+          4].rolling(window=20).mean()\n    df[\"SMA_50\"] = df.iloc[:, 4].rolling(window=50).mean()\n    df[\"SMA_200\"]
+          = df.iloc[:, 4].rolling(window=200).mean()\n\n    # Calculate RSI\n\n    df[''change'']
+          = df[''close''].diff()\n    df[''gain''] = df.change.mask(df.change < 0,
+          0.0)\n    df[''loss''] = -df.change.mask(df.change > 0, -0.0)\n    df[''avg_gain'']
+          = rma(df.gain[n+1:].to_numpy(), n,\n                         np.nansum(df.gain.to_numpy()[:n+1])/n)\n    df[''avg_loss'']
+          = rma(df.loss[n+1:].to_numpy(), n,\n                         np.nansum(df.loss.to_numpy()[:n+1])/n)\n    df[''rs'']
+          = df.avg_gain / df.avg_loss\n    df[''rsi''] = 100 - (100 / (1 + df.rs))\n\n    df.drop(columns=[''change'',
+          ''gain'', ''loss'', ''avg_gain'', ''avg_loss'', ''rs''])\n\n    # MACD\n\n    exp1
+          = df[''close''].ewm(span=12, adjust=False).mean()\n    exp2 = df[''close''].ewm(span=26,
+          adjust=False).mean()\n\n    df[''macd''] = exp1 - exp2\n    df[''signal_line'']
+          = df[''macd''].ewm(span=9, adjust=False).mean()\n\n    # Train and Test
+          data\n\n    size = int(len(df[''close'']) * train_size)\n\n    train_set
+          = df.iloc[:size, :].values\n    test_set = df.iloc[size:, :].values\n\n    #
+          Feature scaling\n\n    scaler = preprocessing.StandardScaler().fit(train_set)\n\n    #
+          X and Y and reshape\n    train_set_scaled = scaler.transform(train_set)\n    test_set_scaled
+          = scaler.transform(test_set)\n\n    x_train = []\n    y_train = []\n    x_test
+          = []\n    y_test = []\n\n    for i in range(60, len(train_set_scaled)):\n        x_train.append(train_set_scaled[i
+          - 60:i, :])\n        if i != len(train_set_scaled):\n            y_train.append(train_set_scaled[i,
+          4])\n        else:\n            y_train.append(test_set_scaled[0, 4])\n\n    for
+          i in range(60, len(test_set_scaled) - 1):\n        x_test.append(test_set_scaled[i
+          - 60:i, :])\n        y_test.append(test_set_scaled[i, 4])\n\n    x_train,
+          y_train = np.array(x_train), np.array(y_train)\n    x_test, y_test = np.array(x_test),
+          np.array(y_test)\n\n    x_train = np.reshape(\n        x_train, (x_train.shape[0],
+          timesteps, x_train.shape[2]))\n    x_test = np.reshape(x_test, (x_test.shape[0],
+          timesteps, x_test.shape[2]))\n\n    return x_train, y_train, x_test, y_test\n\nimport
+          argparse\n_parser = argparse.ArgumentParser(prog=''Process data'', description='''')\n_parser.add_argument(\"--input\",
+          dest=\"input_path\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"----output-paths\",
+          dest=\"_output_paths\", type=str, nargs=1)\n_parsed_args = vars(_parser.parse_args())\n_output_files
+          = _parsed_args.pop(\"_output_paths\", [])\n\n_outputs = process_data(**_parsed_args)\n\n_outputs
+          = [_outputs]\n\n_output_serializers = [\n    str,\n\n]\n\nimport os\nfor
+          idx, output_file in enumerate(_output_files):\n    try:\n        os.makedirs(os.path.dirname(output_file))\n    except
+          OSError:\n        pass\n    with open(output_file, ''w'') as f:\n        f.write(_output_serializers[idx](_outputs[idx]))\n"],
+          "image": "python:3.8"}}, "inputs": [{"name": "input", "type": "String"}],
+          "name": "Process data", "outputs": [{"name": "Output", "type": "typing.Tuple"}]}',
+        pipelines.kubeflow.org/component_ref: '{}'}
+  arguments:
+    parameters:
+    - {name: symbol}
+    - {name: interval}
+    - {name: limit}
+  serviceAccountName: pipeline-runner

@@ -1,0 +1,105 @@
+name: Get all data
+inputs:
+- {name: symbol, type: String}
+- {name: interval, type: String}
+- {name: limit, type: Integer}
+outputs:
+- {name: output, type: String}
+implementation:
+  container:
+    image: python:3.8
+    command:
+    - sh
+    - -c
+    - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+      'aiohttp===3.7.4' 'asyncio' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip
+      install --quiet --no-warn-script-location 'aiohttp===3.7.4' 'asyncio' --user)
+      && "$0" "$@"
+    - sh
+    - -ec
+    - |
+      program_path=$(mktemp)
+      printf "%s" "$0" > "$program_path"
+      python3 -u "$program_path" "$@"
+    - |
+      def _make_parent_dirs_and_return_path(file_path: str):
+          import os
+          os.makedirs(os.path.dirname(file_path), exist_ok=True)
+          return file_path
+
+      def get_all_data(symbol, interval, limit, output_path):
+
+          import asyncio
+          from aiohttp import ClientSession
+          import pickle
+
+          intervalDict = {
+              "1h": 3600*1000,
+              "4h": 4*3600*1000,
+              "8h": 8*3600*1000
+          }
+
+          klines = []
+
+          async def getKlines(session, url, params):
+              async with session.get(url, params=params) as res:
+                  klines = await res.json()
+                  return klines
+
+          async def getTime(session):
+              url = "https://api.binance.com/api/v3/time"
+              async with session.get(url) as res:
+                  return await res.json()
+
+          def roundTime(time):
+              BASE = 100000
+
+              r = time % BASE
+
+              return time + BASE - r
+
+          async def getData(symbol, interval, limit):
+
+              import os
+
+              MAX_DATA_REQUEST = 1000
+              URL = "https://api.binance.com/api/v3/klines"
+
+              async with ClientSession() as session:
+                  time_started = (await getTime(session))["serverTime"]
+                  tasks = []
+                  for i in range(0, int(limit/MAX_DATA_REQUEST)):
+                      end_time = int(time_started - i*(MAX_DATA_REQUEST)
+                                     * intervalDict[interval])
+                      end_time = roundTime(end_time)
+                      tasks.append(asyncio.ensure_future(getKlines(session, URL, {
+                          "interval": interval, "symbol": symbol, "limit": MAX_DATA_REQUEST, "endTime": end_time})))
+
+                  data = await asyncio.gather(*tasks)
+
+                  for req in data:
+                      for kline in req:
+                          klines.insert(0, kline)
+
+          asyncio.run(getData(symbol, interval, limit))
+          with open(output_path, 'wb') as fp:
+              pickle.dump(klines, fp)
+
+      import argparse
+      _parser = argparse.ArgumentParser(prog='Get all data', description='')
+      _parser.add_argument("--symbol", dest="symbol", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--interval", dest="interval", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--limit", dest="limit", type=int, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--output", dest="output_path", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
+      _parsed_args = vars(_parser.parse_args())
+
+      _outputs = get_all_data(**_parsed_args)
+    args:
+    - --symbol
+    - {inputValue: symbol}
+    - --interval
+    - {inputValue: interval}
+    - --limit
+    - {inputValue: limit}
+    - --output
+    - {outputPath: output}
